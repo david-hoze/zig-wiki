@@ -195,6 +195,70 @@ pub const Statement = struct {
 };
 ```
 
+## Upsert pattern (INSERT OR UPDATE)
+
+SQLite's `ON CONFLICT` clause lets you insert-or-update in one statement:
+
+```zig
+var stmt = try database.prepare(
+    \\INSERT INTO classifications (hash, contains_women, vote_block, vote_safe)
+    \\VALUES (?1, ?2, ?3, ?4)
+    \\ON CONFLICT(hash) DO UPDATE SET
+    \\    vote_block = vote_block + ?3,
+    \\    vote_safe = vote_safe + ?4,
+    \\    last_updated = CURRENT_TIMESTAMP
+);
+defer stmt.deinit();
+```
+
+This is useful for vote counting, rate limiting, or any "create if new, update if exists" pattern. The `?3` and `?4` in the `DO UPDATE` clause refer to the same bound parameters.
+
+For audit logs where you want one record per user per item:
+
+```zig
+var stmt = try database.prepare(
+    \\INSERT INTO votes (hash, user_id, source, confidence)
+    \\VALUES (?1, ?2, ?3, ?4)
+    \\ON CONFLICT(hash, user_id) DO UPDATE SET
+    \\    source = ?3,
+    \\    confidence = ?4,
+    \\    created_at = CURRENT_TIMESTAMP
+);
+```
+
+## Many defers in one function
+
+You can stack many `defer` calls in a single function. Zig runs them all in reverse order when the scope exits. This is common when running multiple queries:
+
+```zig
+pub fn showStats(db: *Database) !void {
+    var stmt1 = try db.prepare("SELECT COUNT(*) FROM users");
+    defer stmt1.deinit();
+
+    var stmt2 = try db.prepare("SELECT COUNT(*) FROM classifications");
+    defer stmt2.deinit();
+
+    var stmt3 = try db.prepare("SELECT COUNT(*) FROM votes");
+    defer stmt3.deinit();
+
+    // All three are finalized when function exits, even on error
+}
+```
+
+## Ignoring non-critical errors with `catch {}`
+
+When a database operation is "nice to have" but shouldn't crash the main flow:
+
+```zig
+// Main operation — must succeed
+_ = try stmt.step();
+
+// Audit log — failure is not critical
+_ = vote_stmt.step() catch {};
+```
+
+`catch {}` silently discards the error. Use this for side-effects like logging or analytics where failure shouldn't affect the user-facing response.
+
 ## Common gotchas
 
 1. **Error message type**: Use `[*c]u8` not `?[*:0]u8` for sqlite3_exec's error parameter
