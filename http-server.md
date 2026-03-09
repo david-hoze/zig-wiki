@@ -160,6 +160,61 @@ fn handleStats(allocator: std.mem.Allocator, request: *std.http.Server.Request) 
 }
 ```
 
+## POST endpoint with JSON parsing
+
+A complete pattern: parse JSON body, validate, write to DB, return JSON:
+
+```zig
+const RegisterRequest = struct {
+    email: []const u8,
+};
+
+fn handleRegister(
+    allocator: std.mem.Allocator,
+    database: *Database,
+    request: *std.http.Server.Request,
+    body: ?[]const u8,
+) !void {
+    const request_body = body orelse {
+        try sendError(request, .bad_request, "missing request body");
+        return;
+    };
+
+    // Parse JSON into struct — catch turns parse error into a handled response
+    const parsed = std.json.parseFromSlice(RegisterRequest, allocator, request_body, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        try sendError(request, .bad_request, "invalid JSON");
+        return;
+    };
+    defer parsed.deinit();
+    const req = parsed.value;
+
+    // Validate
+    if (req.email.len == 0) {
+        try sendError(request, .bad_request, "email is required");
+        return;
+    }
+
+    // Use the parsed data (e.g., insert into DB)
+    var stmt = try database.prepare("INSERT INTO users (email) VALUES (?1)");
+    defer stmt.deinit();
+    try stmt.bindText(1, req.email);
+    _ = stmt.step() catch {
+        try sendError(request, .bad_request, "user already exists");
+        return;
+    };
+
+    // Build dynamic JSON response
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    try std.fmt.format(buf.writer(), \\{{"email":"{s}"}}, .{req.email});
+    try sendResponse(request, .ok, buf.items);
+}
+```
+
+**Key pattern**: `catch` after `parseFromSlice` or `stmt.step()` lets you return a proper HTTP error instead of crashing.
+
 ## Extracting headers
 
 ```zig

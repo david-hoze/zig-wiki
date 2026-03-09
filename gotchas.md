@@ -186,6 +186,58 @@ var x: i32 = 42;
 const y = 42;  // OK — comptime_int
 ```
 
+## `zig build` fails with AccessDenied on Windows
+
+If the output binary is still running, `zig build` can't overwrite it:
+
+```
+error: unable to update file from '...\shmirat-server.exe': AccessDenied
+```
+
+**Fix**: Kill the running process first, then build.
+
+## Base64 encoding/decoding
+
+Zig has built-in base64 in `std.base64`:
+
+```zig
+// Encode
+const raw_bytes: []const u8 = some_blob;
+const encoded_len = std.base64.standard.Encoder.calcSize(raw_bytes.len);
+const encoded = try allocator.alloc(u8, encoded_len);
+defer allocator.free(encoded);
+_ = std.base64.standard.Encoder.encode(encoded, raw_bytes);
+
+// Decode
+const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded_str) catch {
+    // Invalid base64
+    return error.InvalidInput;
+};
+const decoded = try allocator.alloc(u8, decoded_len);
+defer allocator.free(decoded);
+std.base64.standard.Decoder.decode(decoded, encoded_str) catch {
+    return error.InvalidInput;
+};
+```
+
+**Gotcha**: `calcSizeForSlice` and `decode` are separate steps that can both fail. Always handle both.
+
+## JSON parse errors don't tell you what's wrong
+
+When `std.json.parseFromSlice` fails, you get an opaque error. To debug:
+
+```zig
+const parsed = std.json.parseFromSlice(MyStruct, allocator, body, .{
+    .ignore_unknown_fields = true,
+}) catch {
+    // No details about WHICH field was wrong or WHERE the parse failed
+    // Tip: log the raw body to stderr to debug
+    std.log.err("Bad JSON: {s}", .{body});
+    try sendError(request, .bad_request, "invalid JSON");
+    return;
+};
+```
+
 ## Debugging tips
 
 1. **Use `std.log` liberally** — trace execution flow
